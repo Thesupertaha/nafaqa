@@ -1,0 +1,2 @@
+# nafaqa
+Money tracker app
