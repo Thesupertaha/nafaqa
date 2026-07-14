@@ -1,0 +1,63 @@
+version: '3.9'
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nafaqa
+      POSTGRES_PASSWORD: nafaqa_dev_password
+      POSTGRES_DB: nafaqa
+    ports:
+      - '5432:5432'
+    volumes:
+      - nafaqa_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nafaqa']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://nafaqa:nafaqa_dev_password@db:5432/nafaqa?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: local_dev_access_secret_change_me_32chars
+      JWT_REFRESH_SECRET: local_dev_refresh_secret_change_me_32chars
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-replace-me}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+    ports:
+      - '3000:3000'
+
+  adminer:
+    image: adminer:4
+    restart: unless-stopped
+    ports:
+      - '8080:8080'
+    depends_on:
+      - db
+
+volumes:
+  nafaqa_db_data:

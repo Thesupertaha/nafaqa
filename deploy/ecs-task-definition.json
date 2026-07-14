@@ -1,0 +1,43 @@
+{
+  "family": "nafaqa-backend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/nafaqa-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/nafaqa-backend-task-role",
+  "containerDefinitions": [
+    {
+      "name": "nafaqa-backend",
+      "image": "ACCOUNT_ID.dkr.ecr.me-south-1.amazonaws.com/nafaqa-backend:latest",
+      "essential": true,
+      "portMappings": [{ "containerPort": 3000, "protocol": "tcp" }],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/api/health', r => process.exit(r.statusCode===200?0:1))\""],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 10
+      },
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:me-south-1:ACCOUNT_ID:secret:nafaqa/database-url" },
+        { "name": "JWT_ACCESS_SECRET", "valueFrom": "arn:aws:secretsmanager:me-south-1:ACCOUNT_ID:secret:nafaqa/jwt-access-secret" },
+        { "name": "JWT_REFRESH_SECRET", "valueFrom": "arn:aws:secretsmanager:me-south-1:ACCOUNT_ID:secret:nafaqa/jwt-refresh-secret" },
+        { "name": "OPENAI_API_KEY", "valueFrom": "arn:aws:secretsmanager:me-south-1:ACCOUNT_ID:secret:nafaqa/openai-api-key" },
+        { "name": "REDIS_URL", "valueFrom": "arn:aws:secretsmanager:me-south-1:ACCOUNT_ID:secret:nafaqa/redis-url" }
+      ],
+      "environment": [
+        { "name": "NODE_ENV", "value": "production" },
+        { "name": "PORT", "value": "3000" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/nafaqa-backend",
+          "awslogs-region": "me-south-1",
+          "awslogs-stream-prefix": "backend"
+        }
+      }
+    }
+  ]
+}

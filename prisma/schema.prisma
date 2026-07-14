@@ -1,0 +1,286 @@
+// Nafaqa Backend — Prisma Schema
+// This is the implemented subset of the full Database Design document's
+// schema, covering: auth/session security, users, reference data, accounts,
+// transactions, budgets, and AI chat. Tables not yet wired into this backend
+// slice (banks, bank_sender_ids, message_imports, receipts, rules, tags,
+// notifications, devices, security_logs) are fully specified in
+// Database_Design.md / database_schema.sql and follow the exact same
+// module pattern established here (module/service/controller/DTOs) when
+// added — see README.md's "Extending the backend" section.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  active
+  suspended
+  deleted
+}
+
+enum LanguageCode {
+  ar
+  en
+}
+
+enum AccountType {
+  bank
+  cash
+  wallet
+  credit_card
+}
+
+enum TransactionTypeEnum {
+  debit
+  credit
+}
+
+enum TransactionSource {
+  chat
+  manual
+  import
+}
+
+enum BudgetPeriod {
+  weekly
+  monthly
+  yearly
+}
+
+enum ChatRole {
+  user
+  assistant
+  system
+}
+
+enum AuditAction {
+  create
+  update
+  delete
+}
+
+model Currency {
+  code          String   @id @db.Char(3)
+  numericCode   String   @map("numeric_code") @db.Char(3)
+  nameEn        String   @map("name_en")
+  nameAr        String   @map("name_ar")
+  symbol        String
+  decimalDigits Int      @map("decimal_digits") @default(2)
+  createdAt     DateTime @map("created_at") @default(now())
+
+  countries    Country[]
+  users        User[]
+  accounts     Account[]
+  transactions Transaction[] @relation("TxnCurrency")
+  budgets      Budget[]
+
+  @@map("currencies")
+}
+
+model Country {
+  isoCode             String   @id @map("iso_code") @db.Char(2)
+  nameEn              String   @map("name_en")
+  nameAr              String   @map("name_ar")
+  defaultCurrencyCode String   @map("default_currency_code") @db.Char(3)
+  isSupported         Boolean  @map("is_supported") @default(false)
+  createdAt           DateTime @map("created_at") @default(now())
+
+  defaultCurrency Currency @relation(fields: [defaultCurrencyCode], references: [code], onDelete: Restrict)
+  users           User[]
+
+  @@map("countries")
+}
+
+model User {
+  id                   String       @id @default(uuid()) @db.Uuid
+  email                String?      @unique
+  phone                String?      @unique
+  passwordHash         String       @map("password_hash")
+  displayName          String       @map("display_name")
+  preferredLanguage    LanguageCode @map("preferred_language") @default(en)
+  preferredCountryCode String?      @map("preferred_country_code") @db.Char(2)
+  defaultCurrencyCode  String       @map("default_currency_code") @db.Char(3)
+  status               UserStatus   @default(active)
+  createdAt            DateTime     @map("created_at") @default(now())
+  updatedAt            DateTime     @map("updated_at") @updatedAt
+  deletedAt            DateTime?    @map("deleted_at")
+
+  preferredCountry Country? @relation(fields: [preferredCountryCode], references: [isoCode], onDelete: SetNull)
+  defaultCurrency  Currency @relation(fields: [defaultCurrencyCode], references: [code], onDelete: Restrict)
+
+  accounts         Account[]
+  categories       Category[]
+  transactions     Transaction[]
+  budgets          Budget[]
+  aiChats          AiChat[]
+  refreshFamilies  RefreshTokenFamily[]
+  auditLogs        AuditLog[]
+
+  @@index([status])
+  @@map("users")
+}
+
+model RefreshTokenFamily {
+  id            String    @id @default(uuid()) @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  currentSeq    Int       @map("current_seq") @default(0)
+  lastUsedHash  String?   @map("last_used_hash")
+  revokedAt     DateTime? @map("revoked_at")
+  expiresAt     DateTime  @map("expires_at")
+  createdAt     DateTime  @map("created_at") @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_token_families")
+}
+
+model Category {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String?  @map("user_id") @db.Uuid
+  parentCategoryId String?  @map("parent_category_id") @db.Uuid
+  nameEn           String   @map("name_en")
+  nameAr           String   @map("name_ar")
+  icon             String?
+  color            String?
+  isSystem         Boolean  @map("is_system") @default(false)
+  createdAt        DateTime @map("created_at") @default(now())
+  updatedAt        DateTime @map("updated_at") @updatedAt
+
+  user           User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parentCategory Category?  @relation("CategoryHierarchy", fields: [parentCategoryId], references: [id], onDelete: SetNull)
+  subCategories  Category[] @relation("CategoryHierarchy")
+
+  transactions Transaction[]
+  budgets      Budget[]
+
+  @@index([userId])
+  @@map("categories")
+}
+
+model Account {
+  id                 String      @id @default(uuid()) @db.Uuid
+  userId             String      @map("user_id") @db.Uuid
+  name               String
+  accountNumberLast4 String?     @map("account_number_last4") @db.VarChar(4)
+  currencyCode       String      @map("currency_code") @db.Char(3)
+  accountType        AccountType @map("account_type")
+  isActive           Boolean     @map("is_active") @default(true)
+  createdAt          DateTime    @map("created_at") @default(now())
+  updatedAt          DateTime    @map("updated_at") @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currency Currency @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+
+  transactions Transaction[]
+
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Transaction {
+  id                 String              @id @default(uuid()) @db.Uuid
+  userId             String              @map("user_id") @db.Uuid
+  accountId          String?             @map("account_id") @db.Uuid
+  categoryId         String?             @map("category_id") @db.Uuid
+  amount             Decimal             @db.Decimal(18, 2)
+  currencyCode       String              @map("currency_code") @db.Char(3)
+  merchantRaw        String?             @map("merchant_raw")
+  merchantNormalized String?             @map("merchant_normalized")
+  description        String?
+  transactionType    TransactionTypeEnum @map("transaction_type") @default(debit)
+  sourceType         TransactionSource   @map("source_type")
+  confidenceScore    Decimal?            @map("confidence_score") @db.Decimal(3, 2)
+  isUserConfirmed    Boolean             @map("is_user_confirmed") @default(false)
+  idempotencyKey     String?             @map("idempotency_key")
+  occurredAt         DateTime            @map("occurred_at")
+  createdAt          DateTime            @map("created_at") @default(now())
+  updatedAt          DateTime            @map("updated_at") @updatedAt
+  deletedAt          DateTime?           @map("deleted_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account  Account?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  currency Currency  @relation("TxnCurrency", fields: [currencyCode], references: [code], onDelete: Restrict)
+
+  aiChatMessages AiChatMessage[]
+
+  @@index([userId, occurredAt(sort: Desc)])
+  @@index([userId, categoryId])
+  @@unique([userId, idempotencyKey])
+  @@map("transactions")
+}
+
+model Budget {
+  id           String       @id @default(uuid()) @db.Uuid
+  userId       String       @map("user_id") @db.Uuid
+  categoryId   String?      @map("category_id") @db.Uuid
+  name         String?
+  limitAmount  Decimal      @map("limit_amount") @db.Decimal(18, 2)
+  currencyCode String       @map("currency_code") @db.Char(3)
+  period       BudgetPeriod
+  startDate    DateTime     @map("start_date") @db.Date
+  isActive     Boolean      @map("is_active") @default(true)
+  createdAt    DateTime     @map("created_at") @default(now())
+  updatedAt    DateTime     @map("updated_at") @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  currency Currency  @relation(fields: [currencyCode], references: [code], onDelete: Restrict)
+
+  @@index([userId])
+  @@map("budgets")
+}
+
+model AiChat {
+  id        String       @id @default(uuid()) @db.Uuid
+  userId    String       @map("user_id") @db.Uuid
+  title     String?
+  language  LanguageCode @default(en)
+  createdAt DateTime     @map("created_at") @default(now())
+  updatedAt DateTime     @map("updated_at") @updatedAt
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages AiChatMessage[]
+
+  @@index([userId])
+  @@map("ai_chats")
+}
+
+model AiChatMessage {
+  id                     String   @id @default(uuid()) @db.Uuid
+  chatId                 String   @map("chat_id") @db.Uuid
+  role                   ChatRole
+  content                String
+  extractedPayload       Json?    @map("extracted_payload")
+  resultingTransactionId String?  @map("resulting_transaction_id") @db.Uuid
+  createdAt              DateTime @map("created_at") @default(now())
+
+  chat                 AiChat       @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  resultingTransaction Transaction? @relation(fields: [resultingTransactionId], references: [id], onDelete: SetNull)
+
+  @@index([chatId, createdAt])
+  @@map("ai_chat_messages")
+}
+
+model AuditLog {
+  id          String      @id @default(uuid()) @db.Uuid
+  userId      String?     @map("user_id") @db.Uuid
+  entityType  String      @map("entity_type")
+  entityId    String      @map("entity_id") @db.Uuid
+  action      AuditAction
+  beforeState Json?       @map("before_state")
+  afterState  Json?       @map("after_state")
+  createdAt   DateTime    @map("created_at") @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@map("audit_logs")
+}
